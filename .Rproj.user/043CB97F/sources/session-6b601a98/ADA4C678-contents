@@ -1,0 +1,392 @@
+---
+title: "Lab1"
+author: 'Andrew Bartnik'
+date: "`r Sys.Date()`"
+code-fold: true
+output:
+  html_document: default
+
+  
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+library("tidymodels")
+library("tidyverse")
+library("dplyr")
+library("janitor")
+library("corrplot")
+library(lubridate)
+dat <- read_csv(file = "https://raw.githubusercontent.com/MaRo406/eds-232-machine-learning/main/data/pumpkin-data.csv")
+```
+
+# Case Study: 
+
+The Pumpkin Market The data you just loaded includes 1757 lines of data about the market for pumpkins, sorted into groupings by city. This is raw data extracted from the Specialty Crops Terminal Markets Standard Reports distributed by the United States Department of Agriculture.
+
+You are loading a pumpkin data set so as to ask questions of it.
+
+1. When is the best time to buy pumpkins?
+
+2. What price can I expect of a case of miniature pumpkins?
+
+3. Should I buy them in half-bushel baskets or by the 1 1/9 bushel box?
+
+## Examine the data
+
+```{r data, collapse=TRUE}
+glimpse(dat)
+```
+
+```{r, echo=TRUE}
+# Clean names to the snake_case convention
+pumpkins <- dat %>% clean_names(case = "snake")
+# Return column names
+pumpkins %>% names()
+```
+
+## Select desired columns
+
+```{r, echo=TRUE}
+pumpkins <- pumpkins %>% select(variety, city_name, package, low_price, high_price, date)
+## Print data set
+pumpkins %>% slice_head(n = 5)
+```
+
+```{r, echo=TRUE, message=FALSE}
+# Extract the month and day from the dates and add as new columns
+pumpkins <- pumpkins %>%
+  mutate(date = mdy(date),  
+         day = yday(date),
+         month = month(date))
+pumpkins %>% 
+  select(-day)
+## View the first few rows
+pumpkins %>% slice_head(n = 7)
+```
+
+There are two column dealing with price, high and low. Let's combine them into a single average price column.
+
+```{r, echo=TRUE}
+# Create a new column price
+pumpkins <- pumpkins %>% 
+  mutate(price = (low_price+ high_price)/2)
+```
+
+Let's take a look at pumpkins sales throughout the year.
+
+*Question 1:* Create a scatter plot using price on the y-axis and day on the x-axis.
+
+```{r, echo=TRUE}
+# Scatter plot
+ggplot(data = pumpkins, aes(x = day, y = price)) + 
+  geom_point(size = 1, alpha = 0.6) +
+  geom_smooth(se = FALSE, color = "red", linetype = "dashed") +
+  labs(title = "Pumpkin Price Trend Over Time", 
+       x = "Day of the Year",
+       y = 'Price ($)',
+       color = 'Price ($)') +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5, color = "#666666", size = 14),
+        axis.title.x = element_text(color = "#333333", size = 12),
+        axis.title.y = element_text(color = "#333333", size = 12),
+        axis.text = element_text(color = "#000000"),
+        legend.position = "bottom",
+        legend.title = element_text(color = "#333333", size = 12),
+        legend.text = element_text(color = "#000000"))
+
+
+```
+
+Now, before we go any further, let's take another look at the data. Notice anything odd?
+
+That's right: pumpkins are sold in many different configurations. Some are sold in 1 1/9 bushel measures, and some in 1/2 bushel measures, some per pumpkin, some per pound, and some in big boxes with varying widths.
+
+Let's verify this:
+
+```{r, echo=TRUE}
+# Verify the distinct observations in Package column
+pumpkins %>% 
+  distinct(package)
+```
+
+Pumpkins seem to be very hard to weigh consistently, so let's filter them by selecting only pumpkins with the string bushel in the package column and put this in a new data frame "new_pumpkins".
+
+*Question 2* In the first section of the chunk below, use a combination of dplyr::filter() and stringr::str_detect() to achieve what we want.
+
+```{r}
+# Retain only pumpkins with "bushel" in the package column
+new_pumpkins <- pumpkins |> 
+  filter(str_detect(package, "bushel"))
+# Get the dimensions of the new data
+dim(new_pumpkins)
+# View a few rows of the new data
+new_pumpkins %>% 
+  slice_head(n = 10)
+```
+
+You can see that we have narrowed down to 415 rows of data containing pumpkins by the bushel.
+
+But wait! There's one more thing to do
+
+Did you notice that the bushel amount varies per row? You need to normalize the pricing so that you show the pricing per bushel, not per 1 1/9 or 1/2 bushel. Time to do some math to standardize it.
+
+We'll use the function case_when() to mutate the Price column depending on some conditions. case_when allows you to vectorise multiple if_else()statements.
+
+```{r, echo=TRUE}
+# Convert the price if the Package contains fractional bushel values
+new_pumpkins <- new_pumpkins %>% 
+  mutate(price = case_when(
+    str_detect(package, "1 1/9") ~ price/(1.1),
+    str_detect(package, "1/2") ~ price*2,
+    TRUE ~ price))
+# View the first few rows of the data
+new_pumpkins %>% 
+  slice_head(n = 30)
+```
+
+## Data Visualization
+
+```{r, echo=TRUE}
+# Set theme
+theme_set(theme_light())
+# Make a scatter plot of month and price
+new_pumpkins %>% 
+  ggplot(mapping = aes(x = day, y = price)) +
+  geom_point(size = 1.6) 
+```
+
+*Question 3:* Is this a useful plot? Does anything about it surprise you?
+
+This plot is partially useful, we can see that pumpkins bought around halloween tend to sell at a much higher price than pumpkins bought shortly after halloween. It is hard to draw any further conclusions, since our points aren't grouped.
+
+How do we make it useful? To get charts to display useful data, you usually need to group the data somehow.
+
+*Question 4:* Within new_pumpkins, group the pumpkins into groups based on the month column and then find the mean price for each month (in the next chunk).
+
+Hint: use dplyr::group_by() %\>% summarize()
+
+```{r, echo=TRUE}
+# Find the average price of pumpkins per month
+month <- new_pumpkins |>
+  group_by(month) |>
+  summarise(avg_price = mean(price))
+```
+
+*Question 5:* Now do that again, but continue on and plot the results with a bar plot
+
+```{r, echo=TRUE}
+# Find the average price of pumpkins per month then plot a bar chart
+ggplot(data = month, aes(x = month, y = avg_price)) + geom_bar(stat = 'identity') + 
+  labs(x = "Month", y = "Price ($)", title = 'Avg Pumpkin Price by Month')
+```
+
+\# Preprocessing data for modelling using recipes
+
+What if we wanted to predict the price of a pumpkin based on the city or package columns which are of type character? How could we find the correlation between, say, package and price?
+
+Machine learning models work best with numeric features rather than text values, so you generally need to convert categorical features into numeric representations.
+
+This means that we have to find a way to reformat our predictors to make them easier for a model to use effectively, a process known as **feature engineering**.
+
+Different models have different preprocessing requirements. For instance, least squares requires encoding categorical variables such as month, variety and city_name. This simply involves translating a column with categorical values into one or more numeric columns that take the place of the original.
+
+Now let's introduce another useful Tidymodels package: recipes - which will help you preprocess data before training your mode. A recipe is an object that defines what steps should be applied to a data set in order to get it ready for modelling.
+
+Now, let's create a recipe that prepares our data for modelling by substituting a unique integer for all the observations in the predictor columns:
+
+```{r, echo=TRUE}
+# Specify a recipe
+pumpkins_recipe <- recipe(price ~ ., data = new_pumpkins) %>% 
+  step_integer(all_predictors(), zero_based = TRUE)
+# Print out the recipe
+pumpkins_recipe
+```
+
+OK, we created our first recipe that specifies an outcome (price) and its corresponding predictors and that all the predictor columns should be encoded into a set of integers. Let's quickly break it down:
+
+The call to recipe() with a formula tells the recipe the roles of the variables using new_pumpkins data as the reference. For instance the price column has been assigned an outcome role while the rest of the columns have been assigned a predictor role.
+
+step_integer(all_predictors(), zero_based = TRUE) specifies that all the predictors should be converted into a set of integers with the numbering starting at 0.
+
+How can we confirm that the recipe is doing what we intend? Once your recipe is defined, you can estimate the parameters required to preprocess the data, and then extract the processed data. You don't typically need to do this when you use Tidymodels (we'll see the normal convention in just a minute with workflows) but its a good sanity check for confirming that recipes are doing what you expect.
+
+For that, you'll need two more verbs: prep() and bake()
+
+prep(): estimates the required parameters from a training set that can be later applied to other data sets.
+
+bake(): takes a prepped recipe and applies the operations to any data set.
+
+Now let's prep and bake our recipes to confirm that under the hood, the predictor columns will be first encoded before a model is fit.
+
+```{r, echo=TRUE}
+# Prep the recipe
+pumpkins_prep <- prep(pumpkins_recipe)
+# Bake the recipe to extract a preprocessed new_pumpkins data
+baked_pumpkins <- bake(pumpkins_prep, new_data = NULL)
+# Print out the baked data set
+baked_pumpkins %>% 
+  slice_head(n = 10)
+```
+
+The processed data baked_pumpkins has all its predictors encoded confirming that indeed the preprocessing steps defined as our recipe will work as expected. This makes it harder for you to read but more intelligible for tidymodels. Take a look at how the observations have been mapped to numbers.
+
+*Question 6:* From looking at the baked_pumpkins tibble, how many total cities are represented in the data set?
+
+```{r, echo=TRUE}
+length(unique(baked_pumpkins$city_name))
+
+```
+
+There are 10 different cities represented in the data set.
+
+baked_pumpkins is a data frame that we can perform computations on. For instance, let's try to find a good correlation between two variables to potentially build a good predictive model. We'll use the function cor() to do this.
+
+```{r, echo=TRUE}
+# Find the correlation between the package and the price
+cor(baked_pumpkins$package, baked_pumpkins$price)
+```
+
+*Question 7:* Calculate the correlation between pumpkin price and two other variables in the data set
+
+```{r, echo=TRUE}
+# Find the correlation between the variety, city_name and price
+cor(baked_pumpkins$variety, baked_pumpkins$price)
+cor(baked_pumpkins$city_name, baked_pumpkins$price)
+```
+
+*Question 8:* Which of these three variables is most highly correlated with price? Why might this be?
+
+The price is most highly (negatively) correlated with the variety of pumpkin. Different pumpkin varieties are more popular among consumers, which makes sense.
+
+Now let's visualize a correlation matrix of all the columns using the corrplot package.
+
+```{r, echo=TRUE}
+# Load the corrplot package
+library(corrplot)
+# Obtain correlation matrix
+corr_mat <- cor(baked_pumpkins %>% 
+                  # Drop columns that are not really informative
+                  select(-c(low_price, high_price)))
+# Make a correlation plot between the variables
+corrplot(corr_mat, method = "shade", shade.col = NA, tl.col = "black", tl.srt = 45, addCoef.col = "black", cl.pos = "n", order = "original")
+```
+
+# Build a linear regression model
+
+Now that we have build a recipe, and actually confirmed that the data will be pre-processed appropriately, let's now build a regression model to answer the question: What price can I expect of a given pumpkin package?
+
+#Train a linear regression model using the training set As you may have already figured out, the column price is the outcome variable while the package column is the predictor variable.
+
+To do this, we'll first split the data. Data splitting is a key part of the machine learning process. For now we'll do a 80/2o split, where 80% of the data goes into training and 20% into the test set. Then we'll define a recipe that will encode the predictor column into a set of integers, then build a model specification. We won't prep and bake our recipe since we already know it will preprocess the data as expected.
+
+```{r, echo=TRUE}
+set.seed(123)
+# Split the data into training and test sets
+pumpkins_split <- new_pumpkins %>% 
+  initial_split(prop = 0.8)
+# Extract training and test data
+pumpkins_train <- training(pumpkins_split)
+pumpkins_test <- testing(pumpkins_split)
+# Create a recipe for preprocessing the data
+lm_pumpkins_recipe <- recipe(price ~ package, data = pumpkins_train) %>% 
+  step_integer(all_predictors(), zero_based = TRUE)
+# Create a linear model specification
+lm_spec <- linear_reg() %>% 
+  set_engine("lm") %>% 
+  set_mode("regression")
+```
+
+Now that we have a recipe and a model specification, we need to find a way of bundling them together into an object that will first preprocess the data (prep+bake behind the scenes), fit the model on the preprocessed data and also allow for potential post-processing activities.
+
+So let's bundle everything up into a workflow. A workflow is a container object that aggregates information required to fit and predict from a model.
+
+```{r, echo=TRUE}
+# Hold modelling components in a workflow
+lm_wf <- workflow() %>% 
+  add_recipe(lm_pumpkins_recipe) %>% 
+  add_model(lm_spec)
+# Print out the workflow
+lm_wf
+```
+
+A workflow can be fit/trained in much the same way a model can.
+
+```{r, echo=TRUE}
+# Train the model
+lm_wf_fit <- lm_wf %>% 
+  fit(data = pumpkins_train)
+# Print the model coefficients learned 
+lm_wf_fit
+```
+
+From the model output, we can see the coefficients learned during training. They represent the coefficients of the line of best fit that gives us the lowest overall error between the actual and predicted variable.
+
+Evaluate model performance using the test set. It's time to see how the model performed! How do we do this?
+
+Now that we've trained the model, we can use it to make predictions for the test_set using parsnip::predict(). Then we can compare these predictions to the actual label values to evaluate how well (or not!) the model is working.
+
+Let's start with making predictions for the test set then bind the columns to the test set.
+
+```{r prediction_test, echo=TRUE}
+# Make predictions for the test set
+predictions <- lm_wf_fit %>% 
+  predict(new_data = pumpkins_test)
+# Bind predictions to the test set
+lm_results <- pumpkins_test %>% 
+  select(c(package, price)) %>% 
+  bind_cols(predictions)
+# Print the first ten rows of the tibble
+lm_results %>% 
+  slice_head(n = 10)
+```
+
+OK, you have just trained a model and used it to make predictions! Let's evaluate the model's performance.
+
+In Tidymodels, we do this using yardstick::metrics(). For linear regression, let's focus on the following metrics:
+
+Root Mean Square Error (RMSE): The square root of the MSE. This yields an absolute metric in the same unit as the label (in this case, the price of a pumpkin). The smaller the value, the better the model (in a simplistic sense, it represents the average price by which the predictions are wrong)
+
+Coefficient of Determination (usually known as R-squared or R2): A relative metric in which the higher the value, the better the fit of the model. In essence, this metric represents how much of the variance between predicted and actual label values the model is able to explain.
+
+```{r evaluate_lr, echo=TRUE}
+# Evaluate performance of linear regression
+metrics(data = lm_results,
+        truth = price,
+        estimate = .pred)
+```
+
+OK, so that is the model performance. Let's see if we can get a better indication by visualizing a scatter plot of the package and price then use the predictions made to overlay a line of best fit.
+
+This means we'll have to prep and bake the test set in order to encode the package column then bind this to the predictions made by our model.
+
+```{r encode_package, echo=TRUE}
+# Encode package column
+package_encode <- lm_pumpkins_recipe %>% 
+  prep() %>% 
+  bake(new_data = pumpkins_test) %>% 
+  select(package)
+# Bind encoded package column to the results
+ plot_results <- lm_results %>%
+ bind_cols(package_encode %>%
+               rename(package_integer = package)) %>%
+  relocate(package_integer, .after = package)
+# Print new results data frame
+plot_results %>%
+  slice_head(n = 5)
+# Make a scatter plot
+plot_results %>%
+  ggplot(mapping = aes(x = package_integer, y = price)) +
+   geom_point(size = 1.6) +
+   # Overlay a line of best fit
+   geom_line(aes(y = .pred), color = "orange", size = 1.2) +
+   xlab("package")
+```
+
+Hmm. The model does not do good job of generalizing the relationship between a package and its corresponding price.
+
+*Question 9* What issues do you see with fitting a linear regression to this data?
+
+We're using categorical features to predict `price` , a continuous variable. A linear regression would be better suited to use a continuous variable to predict another continuous variable, because it assumes a natural ordering between two variables. Here, the linear regression is assuming a natural ordering between different levels of the `package` variable, and the values we encoded for different levels of `package` may not actually be ordered.
+
+Congratulations, you just created a model that can help predict the price of a few varieties of pumpkins. But you can probably create a better model!

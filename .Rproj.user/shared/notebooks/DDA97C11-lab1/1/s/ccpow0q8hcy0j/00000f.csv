@@ -1,0 +1,3 @@
+"0","pumpkins <- pumpkins %>% select(variety, city_name, package, low_price, high_price, date)"
+"0","## Print data set"
+"0","pumpkins %>% slice_head(n = 5)"

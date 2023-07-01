@@ -1,0 +1,73 @@
+---
+title: "Clustering Walkthrough"
+author: "Mateo Robbins"
+date: "2023-03-07"
+output: html_document
+---
+
+```{r, echo = FALSE, eval = TRUE}
+library(tidyverse) 
+library(cluster) #cluster analysis
+library(factoextra) #visualization
+library(tidymodels)# just preprocessing 
+```
+
+```{r}
+# Full ames data set --> recode ordinal variables to numeric
+dat <- AmesHousing::make_ames()
+ames_num <-  dat %>%
+  mutate_if(str_detect(names(.), 'Qual|Cond|QC|Qu'), as.numeric) 
+```
+
+First we need to preprocess the data.  Dummy code the nominal variables, normalize all the numeric variables (scale matters here), then prep and bake.
+```{r}
+ames_dat <- recipe(Sale_Price~., data = ames_num) %>% 
+  step_dummy(all_nominal(), -all_outcomes(), one_hot = TRUE) %>% 
+  step_normalize(all_numeric(), -all_outcomes(), ) %>% 
+  prep() %>%
+  bake(.,ames_num) %>%
+  select(.,-Neighborhood_Hayden_Lake, -Sale_Price)
+```
+
+K-means clustering.  For this algorithm, we need to specify the number of clusters to form.  How many do you think there are?  
+```{r}
+#now let's try a systematic method for setting k
+ames_clust <- kmeans(ames_dat, centers = 3)
+summary(ames_clust)
+tidy(ames_clust)
+fviz_nbclust(ames_dat,
+             kmeans,
+             method = "wss",
+             k.max = 25,
+             verbose = FALSE)
+
+fviz
+```
+
+
+
+```{r}
+#We can examine predictor averages for each cluster
+
+augment(ames_clust, ames_dat) |> 
+  ggplot(aes(Latitude, Longitude, color = .cluster)) + geom_point()
+```
+
+Update the dataset
+```{r}
+
+
+```
+
+Hierarchical clustering
+Now it's your turn to partition the dataset, this time using hclust().
+
+1. The first thing to do is calculate a distance matrix on the data (using dist()) that contains info on how far apart each observation is from each other observation.  
+
+2.Use tidy() on the distance matrix so you can see what is going on.
+
+
+3.Then apply the clustering method with hclust().
+
+
+4.How does the plot look?  For clarity, let's try this again with a subset of our data.  Take a random sample of 100 observations from the data set and run hclust() on that.  Now plot.  Do you see any outliers?  How can you tell?  

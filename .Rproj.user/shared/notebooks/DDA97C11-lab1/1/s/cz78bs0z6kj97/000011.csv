@@ -1,0 +1,2 @@
+"0","## View the first few rows"
+"0","pumpkins %>% slice_head(n = 7)"

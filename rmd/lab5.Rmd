@@ -1,0 +1,593 @@
+---
+title: "Lab5"
+author: "Andrew Bartnik"
+date: "2023-02-07"
+output: html_document
+---
+
+This week's lab is a musical lab. You'll be requesting data from the Spotify API and using it to build k-nearest neighbor and decision tree models.
+
+In order to use the Spotify you must have a Spotify account. If you don't have one, sign up for a free one here: <https://www.spotify.com/us/signup>
+
+Once you have an account, go to Spotify for developers (<https://developer.spotify.com/>) and log in. Click the green "Create a Client ID" button to fill out the form to create an app create an app so you can access the API.
+
+On your developer dashboard page, click on the new app you just created. On the app's dashboard page you will find your Client ID just under the header name of your app. Click "Show Client Secret" to access your secondary Client ID. When you do this you'll be issued a Spotify client ID and client secret key.
+
+You have two options for completing this lab.
+
+**Option 1**: **Classify by users**. Build models that predict whether a given song will be in your collection vs. a partner in class. This requires that you were already a Spotify user so you have enough data to work with. You will download your data from the Spotify API and then exchange with another member of class.
+
+**Option 2**: **Classify by genres**. Build models that predict which genre a song belongs to. This will use a pre-existing Spotify dataset available from Kaggle.com (<https://www.kaggle.com/datasets/mrmorj/dataset-of-songs-in-spotify>)
+
+```{r, echo=TRUE}
+library(spotifyr) #API interaction
+library(tidyverse)
+library(tidymodels)
+library(retry)
+library(rpart)
+library(rpart.plot)
+library(ranger)
+library(baguette)
+```
+
+Client ID and Client Secret are required to create and access token that is required to interact with the API. You can set them as system values so we don't have to do provide them each time.
+
+```{r, echo=TRUE}
+# Sys.setenv(SPOTIFY_CLIENT_ID = '1da3191ac7504680bbd12fd9e405957e') 
+# Sys.setenv(SPOTIFY_CLIENT_SECRET = 'fe8c3efcd6774c108d81f239b00fa7c1')
+
+# access_token <- get_spotify_access_token() #takes ID and SECRET, sends to Spotify and receives an access token
+```
+
+> *This may result in an error:*
+>
+> INVALID_CLIENT: Invalid redirect URI
+>
+> *This can be resolved by editing the callback settings on your app. Go to your app and click "Edit Settings". Under redirect URLs paste this: <http://localhost:1410/> and click save at the bottom.* **Option 1: Data Preparation**
+
+You can use get_my_saved_tracks() to request all your liked tracks. It would be good if you had at least 150-200 liked tracks so the model has enough data to work with. If you don't have enough liked tracks, you can instead use get_my_recently_played(), and in that case grab at least 500 recently played tracks if you can.
+
+The Spotify API returns a dataframe of tracks and associated attributes. However, it will only return up to 50 (or 20) tracks at a time, so you will have to make multiple requests. Use a function to combine all your requests in one call.
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE, include=FALSE}
+
+id <- '1da3191ac7504680bbd12fd9e405957e'
+secret <- 'fe8c3efcd6774c108d81f239b00fa7c1'
+authorization_code <- get_spotify_authorization_code(client_id = id,
+                                                     client_secret = secret)
+                                                     
+                                                     
+access_token <- get_spotify_access_token(client_id = id,
+                                         client_secret = secret)
+
+
+j <- 0
+my_tracks <- data.frame()
+
+#write a function to access liked tracks
+track_list <- function(x) {
+  for (i in 1:x) {
+    output <- get_my_saved_tracks(limit = 50,
+                                  authorization = authorization_code,
+                                  offset = j)
+    my_tracks <- rbind(my_tracks, output)
+    j <- j + 50
+  }
+  return(my_tracks)
+}
+
+my_tracks <- track_list(4)
+my_tracks
+
+af_1 <-
+  get_track_audio_features(my_tracks$track.id[1:100], authorization = access_token)
+af_2 <-
+  get_track_audio_features(my_tracks$track.id[101:200], authorization = access_token)
+audio_feat <- rbind(af_1, af_2) |>
+  cbind(my_tracks$track.name) |>
+  rename(track.name = 'my_tracks$track.name')
+audio_feat$name <- 'Andrew'
+audio_feat <- audio_feat |> select(-type, -id, -uri, -track_href, -analysis_url)
+```
+
+```{r}
+Sys.setenv(SPOTIFY_CLIENT_ID = '110bea5badf0417cb561859f2a97ca57') 
+Sys.setenv(SPOTIFY_CLIENT_SECRET = '1245cb9ece324c00a25e62ac6859d481')
+
+access_token <- get_spotify_access_token() #takes ID and SECRET, sends to Spotify and receives an access token
+```
+
+
+```{r}
+meg_id <- '110bea5badf0417cb561859f2a97ca57'
+meg_secret <- '1245cb9ece324c00a25e62ac6859d481'
+meg_authcode <- get_spotify_authorization_code(client_id = meg_id,
+                                              client_secret = meg_secret)
+meg_token <- get_spotify_access_token(client_id = meg_id,
+                                         client_secret = meg_secret)
+
+m <- 0
+meg_tracks <- data.frame()
+
+#write a function to access liked tracks
+meg_tracklist <- function(x) {
+  for (i in 1:x) {
+    output_meg <- get_my_saved_tracks(limit = 50,
+                                  authorization = meg_authcode,
+                                  offset = m)
+    meg_tracks <- rbind(meg_tracks, output_meg)
+    m <- m + 50
+  }
+  return(meg_tracks)
+}
+
+meg_tracks <- meg_tracklist(4)
+meg_tracks
+
+
+meg_af1 <-
+  get_track_audio_features(meg_tracks$track.id[1:100], authorization = meg_token)
+meg_af2 <-
+  get_track_audio_features(meg_tracks$track.id[101:200], authorization = meg_token)
+meg_audio <- rbind(meg_af1, meg_af2) |>
+  cbind(meg_tracks$track.name) |>
+  rename(track.name = 'meg_tracks$track.name')
+meg_audio$name <- 'Meg'
+meg_audio <- meg_audio |> select(-type, -id, -uri, -track_href, -analysis_url)
+```
+
+```{r, echo=TRUE}
+gab_feat <- read_csv("~/Desktop/MEDS/Winter/Machine Learning/Labs/ML/audio_feat.csv")
+
+data <- audio_feat |> 
+  rbind(gab_feat) |> 
+  mutate_if(is.ordered, .funs = factor, ordered = F) |> 
+  select(-track.name) |> 
+  mutate(name = as.factor(name))
+```
+
+Once you have your tracks, familiarize yourself with this initial dataframe. You'll need to request some additional information for the analysis. If you give the API a list of track IDs using get_track_audio_features(), it will return an audio features dataframe of all the tracks and some attributes of them.
+
+These track audio features are the predictors we are interested in, but this dataframe doesn't have the actual names of the tracks. Append the 'track.name' column from your favorite tracks database.
+
+Find a class mate whose data you would like to use. Add your partner's data to your dataset. Create a new column that will contain the outcome variable that you will try to predict. This variable should contain two values that represent if the track came from your data set or your partner's.
+
+**Option 2: Data preparation**
+
+Download the Spotify dataset from <https://www.kaggle.com/datasets/mrmorj/dataset-of-songs-in-spotify>
+
+Inspect the data. Choose two genres you'd like to use for the classification task. Filter down the data to include only the tracks of that genre.
+
+##Data Exploration (both options)
+
+Let's take a look at your data. Do some exploratory summary stats and visualization.
+
+```{r, echo=TRUE}
+# A quick look at some summary stats 
+summary(audio_feat)
+summary(gab_feat)
+
+# Inspecting danceability, going to bind our data together
+danceable_tracks <- audio_feat %>% 
+  select(track.name, danceability, energy, name)
+
+danceable_tracks_g <- gab_feat %>% select(track.name, danceability, energy, name) %>% 
+  rbind(danceable_tracks) %>% 
+  arrange(danceability)
+
+# Create a scatterplot of energy vs danceability
+ggplot(data = danceable_tracks_g, aes(x = energy, y = danceability, color = name)) + 
+  geom_point() + labs(x = "Energy", y = "Danceability", title = "Playlist energy vs. danceability by name") + theme_minimal()
+
+# Group the danceable_tracks_g data frame by the "name" column and calculate the mean danceability and energy for each group
+danceable_tracks_g %>% 
+  group_by(name) %>% 
+  summarise(mean_d = mean(danceability), mean_e = mean(energy))
+
+
+```
+
+For example: What are the most danceable tracks in your dataset? What are some differences in the data between users (Option 1) or genres (Option 2)? **I am completely unsurprised that Gab's playlist's mean danceability is much higher than mine, but surprised to see that our average energies are similar.**
+
+### **Modeling**
+
+Create two models, a k-nearest neighbor model and a decision tree model that predict whether a track belongs to:
+
+1.  you or your partner's collection
+
+```{r, echo=TRUE}
+set.seed(123)
+# Split the data into a training set (75%) and a test set (25%)
+data_split <- initial_split(data, prop = 0.75)
+
+# Get the training set
+data_train <- training(data_split)
+
+# Get the test set
+data_test <- testing(data_split)
+```
+
+## KNN
+
+```{r, echo=TRUE}
+# Preprocessing
+rec <- recipe(name ~ ., data = data_train) |> 
+  step_dummy(all_nominal(), -all_outcomes(), one_hot = TRUE) |> 
+  step_normalize(all_numeric(), -all_outcomes()) |> 
+  prep()
+
+# Bake the data 
+baked_data <- bake(rec, data_train)
+baked_test <- bake(rec, data_test)
+
+# Define model specifications
+knn_spec <- nearest_neighbor() |> 
+  set_engine("kknn") |> 
+  set_mode("classification")
+
+# Fit model to training data
+knn_fit <- knn_spec %>% 
+  fit(name ~. , data = data_train)
+
+set.seed(123)
+# 10-fold CV on the training dataset
+cv_folds <- data_train |> vfold_cv(v=5) 
+
+# Define workflow
+knn_workflow <- workflow() |> 
+  add_model(knn_spec) |> 
+  add_recipe(rec)
+
+# Fitting workflow to each of our folds
+knn_res <- knn_workflow |> 
+  fit_resamples(
+    resamples = cv_folds,
+    control = control_resamples(save_pred = TRUE)
+  )
+# See how we did
+knn_res |> 
+  collect_metrics()
+
+# Now to tune the model
+knn_spec_tune <- nearest_neighbor(neighbors = tune()) |> 
+  set_mode("classification") |> 
+  set_engine("kknn")
+
+# Define new workflow
+tune_wf <- workflow() |> 
+  add_model(knn_spec_tune) |> 
+  add_recipe(rec)
+
+# Fit the workflow on our predefined folds and hyperparameters
+fit_knn_cv <- tune_wf |> 
+  tune_grid(cv_folds, grid = data.frame(neighbors = c(1, 5, seq(10,100,10))))
+    
+# Check the performance with collect_metrics()
+metrics <- fit_knn_cv %>% collect_metrics()
+
+#final knn wf
+final_wf <- tune_wf |> 
+  finalize_workflow(select_best(fit_knn_cv))
+final_wf
+
+
+#fit final wf 
+final_fit <- final_wf |> 
+  last_fit(data_split)
+
+knn_preds <- final_fit$.predictions |> data.frame() |> mutate(model = "KNN")
+
+final_fit |> collect_metrics()
+```
+
+****
+## Decision Tree
+
+```{r, echo=TRUE}
+#tidymodels
+# model specification
+dt_spec <-
+  decision_tree(
+    mode = 'classification',
+    engine = 'rpart',
+    cost_complexity = 0.1,
+    tree_depth = 4,
+    min_n = 11
+  )
+
+# fitting the training data
+dt_fit <- dt_spec |>
+  fit(name ~ ., data = data_train)
+# dt workflow
+
+dt_workflow <- workflow() |>
+  add_model(dt_spec) |>
+  add_recipe(rec)
+
+# Fitting workflow to each of our folds
+dt_res <- dt_workflow |>
+  fit_resamples(resamples = cv_folds,
+                control = control_resamples(save_pred = TRUE))
+# See how we did
+dt_res |>
+  collect_metrics()
+
+# Now to tune the model
+dt_spec_tune <- decision_tree(
+  tree_depth = tune(),
+  cost_complexity = tune(),
+  min_n = tune()
+) |>
+  set_mode("classification") |>
+  set_engine("rpart")
+
+# Looking at hyperparameters
+tree_grid <-
+  grid_regular(cost_complexity(), tree_depth(), min_n(), levels = 5)
+
+# Define new workflow
+dt_tune_wf <- workflow() |>
+  add_model(dt_spec_tune) |>
+  add_recipe(rec)
+
+# Defining cv for tuning
+tree_cv = data_train |> vfold_cv(v = 5)
+tree_cv
+
+# Tuning
+tree_rs <- tune_grid(
+  dt_spec_tune,
+  name ~ .,
+  resamples = tree_cv,
+  grid = tree_grid,
+  metrics = metric_set(accuracy)
+)
+
+# Visualizing our predictions
+autoplot(tree_rs)
+
+# Selecting the best model
+show_best(tree_rs)
+select_best(tree_rs)
+
+# Now to finalize, train and test our best model
+final_tree <- finalize_model(dt_spec_tune, select_best(tree_rs))
+
+final_tree_fit <- last_fit(final_tree, name ~ ., data_split)
+
+# A look at the predictions
+pred_dt <- final_tree_fit$.predictions |> data.frame() |> mutate(model = "Decision Tree")
+
+```
+
+**After 3 terminal nodes we can see that there are diminishing returns when increasing the size of the tree**
+## Bagged Tree
+
+```{r, echo=TRUE}
+#tidymodels
+# model specification
+bagdt_spec <-
+  bag_tree(
+    mode = 'classification',
+    cost_complexity = 0.1,
+    tree_depth = 4,
+    min_n = 11
+  ) |> 
+  set_engine("rpart", times= 500)
+
+# fitting the training data
+bag_dtfit <- bagdt_spec |>
+  fit(name ~ ., data = data_train)
+# dt workflow
+
+bag_dt_workflow <- workflow() |>
+  add_model(bagdt_spec) |>
+  add_recipe(rec)
+
+# Fitting workflow to each of our folds
+bagdt_res <- bag_dt_workflow |>
+  fit_resamples(resamples = cv_folds,
+                control = control_resamples(save_pred = TRUE))
+# See how we did
+bagdt_res |>
+  collect_metrics()
+
+# Now to tune the model
+bagdt_spec_tune <- bag_tree(
+  tree_depth = tune(),
+  cost_complexity = tune(),
+  min_n = tune()
+) |>
+  set_mode("classification") |>
+  set_engine("rpart", times = 500)
+
+# Looking at hyperparameters
+bagdt_grid <-
+  grid_regular(cost_complexity(), tree_depth(), min_n(), levels = 5)
+
+# Define new workflow
+bagdt_tune_wf <- workflow() |>
+  add_model(bagdt_spec_tune) |>
+  add_recipe(rec)
+
+# Defining cv for tuning
+bagdt_cv = data_train |> vfold_cv(v = 5)
+bagdt_cv
+
+# Tuning
+doParallel::registerDoParallel()
+bagdt_rs <- tune_grid(
+  bagdt_spec_tune,
+  name ~ .,
+  resamples = bagdt_cv,
+  grid = bagdt_grid,
+  metrics = metric_set(accuracy)
+)
+
+# Visualizing our predictions
+autoplot(bagdt_rs)
+
+# Selecting the best model
+show_best(bagdt_rs)
+select_best(bagdt_rs)
+
+# Now to finalize, train and test our best model
+bagdt_final <- finalize_model(bagdt_spec_tune, select_best(bagdt_rs))
+
+final_dt_fit <- last_fit(bagdt_final, name ~ ., data_split)
+
+# A look at the predictions
+pred_bdt <- final_dt_fit$.predictions |> data.frame() |> 
+  mutate(model = "Bagged Decision Tree")
+
+final_dt_fit |> collect_metrics()
+
+```
+
+## Random Forest
+
+```{r, echo=TRUE}
+#tidymodels
+# model specification
+randf_spec <-
+  rand_forest(
+    mode = 'classification',
+    mtry = 3,
+    trees = 500,
+    min_n = 11
+  ) |> 
+  set_engine("ranger")
+
+# fitting the training data
+randf_fit <- randf_spec |>
+  fit(name ~ ., data = data_train)
+# dt workflow
+
+randf_workflow <- workflow() |>
+  add_model(randf_spec) |>
+  add_recipe(rec)
+
+# Fitting workflow to each of our folds
+randf_res <- randf_workflow |>
+  fit_resamples(resamples = cv_folds,
+                control = control_resamples(save_pred = TRUE))
+# See how we did
+randf_res |>
+  collect_metrics()
+
+# Now to tune the model
+randf_spec_tune <- rand_forest(
+  trees = tune(),
+  mtry = tune(),
+  min_n = tune()
+) |>
+  set_mode("classification") |>
+  set_engine("ranger")
+
+# Looking at hyperparameters
+randf_grid <-
+  grid_regular(trees(), min_n(), mtry(range(1:13)), levels = 5)
+
+# Define new workflow
+randf_tune_wf <- workflow() |>
+  add_model(randf_spec_tune) |>
+  add_recipe(rec)
+
+# Defining cv for tuning
+randf_cv = data_train |> vfold_cv(v = 5)
+randf_cv
+
+# Tuning
+doParallel::registerDoParallel()
+randf_rs <- tune_grid(
+  randf_spec_tune,
+  name ~ .,
+  resamples = randf_cv,
+  grid = randf_grid,
+  metrics = metric_set(accuracy)
+)
+
+# Visualizing our predictions
+autoplot(randf_rs)
+
+# Selecting the best model
+show_best(randf_rs)
+select_best(randf_rs)
+
+# Now to finalize, train and test our best model
+randf_final <- finalize_model(randf_spec_tune, select_best(randf_rs))
+
+randf_finalfit <- last_fit(randf_final, name ~ ., data_split)
+
+# A look at the predictions
+pred_rf <- randf_finalfit$.predictions |> data.frame() |> mutate(model = "Random Forest")
+
+randf_finalfit |> collect_metrics()
+```
+
+```{r, echo=TRUE}
+# Comparing accuracy
+pred_table <- rbind(pred_bdt, pred_dt, pred_rf, knn_preds)
+
+# Collect metrics for each model
+knn_metrics <- final_fit %>% collect_metrics()
+dt_metrics <- final_tree_fit %>% collect_metrics()
+bagged_tree_metrics <- final_dt_fit %>% collect_metrics()
+randf_metrics <- randf_finalfit %>% collect_metrics()
+
+# Combine metrics into a single table
+metric_table <- rbind(
+  data.frame(Model = "KNN", knn_metrics),
+  data.frame(Model = "Decision Tree", dt_metrics),
+  data.frame(Model = "Bagged Tree", bagged_tree_metrics),
+  data.frame(Model = "Random Forest", randf_metrics)
+)
+
+# Print the table
+metric_table |> filter(.metric == "accuracy") |> 
+  arrange(desc(.estimate))
+
+```
+
+**The Random forest classifier had our best performance, which was expected. The KNN had the worst performance, followed by the unbagged decision tree, then the bagged decision tree. This makes intuitive sense, we expect that the bagged tree will perform better than the single decision tree since it averages over 500 trees. We expect the random forest learner to perform better than this bagged tree, since it not only bags the tree but also performs feature selection**
+
+```{r, echo=TRUE}
+# Visualizing the model performance
+
+# Create a data frame with model names and accuracy
+accuracy_data <- metric_table %>% 
+  filter(.metric == "accuracy") %>% 
+  select(Model, Accuracy = .estimate)
+
+# Create the bar chart
+ggplot(accuracy_data, aes(x = Model, y = Accuracy)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  labs(title = "Accuracy of Different Models",
+       x = "Model",
+       y = "Accuracy")
+
+```
+
+
+Create four final candidate models:
+
+1.  k-nearest neighbor
+2.  decision tree
+3.  bagged tree
+    -   bag_tree()
+    -   Use the "times =" argument when setting the engine during model specification to specify the number of trees. The rule of thumb is that 50-500 trees is usually sufficient. The bottom of that range should be sufficient here.\
+4.  random forest
+    -   rand_forest()
+    -   m_try() is the new hyperparameter of interest for this type of model. Make sure to include it in your tuning process
+
+Go through the modeling process for each model:
+
+Preprocessing. You can use the same recipe for all the models you create.
+
+Resampling. Make sure to use appropriate resampling to select the best version created by each algorithm.
+
+Tuning. Find the best values for each hyperparameter (within a reasonable range).
+
+Compare the performance of the four final models you have created.
+
+Use appropriate performance evaluation metric(s) for this classification task. A table would be a good way to display your comparison. Use at least one visualization illustrating your model results.

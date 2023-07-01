@@ -1,0 +1,497 @@
+
+
+```{r}
+library(tidyverse)
+library(tidymodels)
+library(gridExtra)
+library(doParallel)
+library(rsample)
+library(glmnet)
+library(tmap)
+library(sf)
+library(leaflet)
+```
+
+
+```{r}
+test <- read_csv("test.csv") |> select(-1, TA1.x = TA1)
+train <- read_csv("train.csv") |> select(-1, -...13)
+# Add an empty DIC column to the test data
+test$DIC <- NA
+
+# Make sure the DIC column is of the same data type as in the training set
+test$DIC <- as.numeric(test$DIC)
+
+
+
+split <- initial_split(train, prop = 0.75, strata = DIC)
+
+training <- training(split)
+validation <- testing(split)
+```
+
+
+
+```{r}
+folds <- vfold_cv(data = training, v = 6, strata = DIC)
+rec_init <- recipe(DIC ~ ., data = training) |> 
+  step_normalize(all_numeric(), -DIC) |> 
+  prep() 
+```
+
+# Gradient Boosting
+
+## Tune Learn Rate
+```{r}
+tune_lr <- boost_tree(learn_rate = tune()) |> 
+  set_mode('regression') |> 
+  set_engine("xgboost") 
+
+lr_grid <- expand.grid(learn_rate = seq(0.0001, 0.5, length.out = 500))
+
+tune_wf_lr <- workflow() |> 
+      add_model(tune_lr) |> 
+      add_recipe(rec_init) 
+
+fit_tune_lr <- tune_wf_lr |> 
+      tune_grid(resamples = folds, grid = lr_grid)
+
+show_best(fit_tune_lr, metric = "rmse")
+
+best_lr <- as.numeric(show_best(fit_tune_lr, metric = "rmse")[1,1])
+```
+## Tuning Tree Parameters
+
+```{r}
+    # Register the number of cores for parallel processing
+    n_cores <- detectCores() - 1 # Use all available cores except one
+    registerDoParallel(cores = n_cores)
+    # Specifying that we want to tune the tree-specific parameters
+    lropt_tune_spec <-
+      boost_tree(
+        learn_rate = best_lr,
+        trees = 1000,
+        min_n = tune(),
+        tree_depth = tune(),
+        loss_reduction = tune()
+      ) |>
+      set_engine("xgboost") |>
+      set_mode('regression')
+
+    tree_grid_test <- grid_regular(tree_depth(), min_n(), loss_reduction())
+    # Setting up the parameters to be tuned and the grid to search over
+    tree_params <- parameters(tree_depth(), min_n(), loss_reduction())
+    trees_grid <- grid_max_entropy(tree_params, size = 200, iter = 5)
+
+    # Defining a new workflow, adding our models and tuning parameters
+    tree_wf <- workflow() |> add_model(lropt_tune_spec) |> add_recipe(rec_init)
+
+    # 
+    fit_tune_trees <- tree_wf |> tune_grid(
+      resamples = folds,
+      grid = trees_grid,
+      metrics = metric_set(rmse),
+      control = control_grid(save_pred = TRUE, parallel_over = "everything")
+    )
+
+    show_best(fit_tune_trees, metric ="rmse")
+      
+    opt_min_n <- as.numeric(show_best(fit_tune_trees, metric = "rmse")[1,1])
+    opt_tree_depth <- as.numeric(show_best(fit_tune_trees, metric = "rmse")[1,2])
+    opt_loss_red <- as.numeric(show_best(fit_tune_trees, metric = "rmse")[1,3])
+    
+
+```
+
+
+```{r}
+      registerDoParallel(cores = n_cores)
+
+    # Specifying that we want to tune the stoachastic-specific parameters
+    stoch_tune_spec <-
+      boost_tree(
+        learn_rate = best_lr,
+        trees = 1000,
+        min_n = opt_min_n,
+        tree_depth = opt_tree_depth,
+        loss_reduction = opt_loss_red,
+        mtry = tune(),
+        sample_size = tune()
+      ) |>
+      set_engine("xgboost") |>
+      set_mode('regression')
+
+    # Define the parameters
+    stoch_params <- parameters(
+      finalize(mtry(), training),
+      sample_size= sample_prop())
+
+    # Generate a grid of parameter values
+    stoch_grid <- grid_max_entropy(stoch_params, size = 200, iter = 5)
+        
+    stoch_tune_wf <- workflow() |> 
+      add_model(stoch_tune_spec) |> 
+      add_recipe(rec_init)
+
+    fit_tune_stoch <- stoch_tune_wf |> tune_grid(
+      resamples = folds,
+      grid = stoch_grid,
+      metrics = metric_set(rmse),
+      control = control_grid(save_pred = TRUE, parallel_over = "everything")
+    )
+    show_best(fit_tune_stoch, metric = "rmse")
+    opt_mtry <- as.numeric(show_best(fit_tune_stoch, metric = "rmse")[1,1])
+    opt_ss <- as.numeric(show_best(fit_tune_stoch, metric = "rmse")[1,2])
+
+```
+
+## Final Model
+```{r}
+final_model <- boost_tree(learn_rate = best_lr,
+                          trees = 1000,
+                          min_n = opt_min_n,
+                          mtry = opt_mtry,
+                          tree_depth = opt_tree_depth,
+                          loss_reduction = opt_loss_red,
+                          sample_size = opt_ss,
+                          ) |> 
+  set_mode("regression") |> 
+  set_engine("xgboost", early_stopping_rounds = 50)
+
+# final_params <- extract_parameter_set_dials(final_model)
+# final_grid <- grid_max_entropy(final_params, size = 50, iter = 5)
+
+final_wf <- workflow() |> 
+  add_model(final_model) |> 
+  add_recipe(rec_init)
+
+final_fit <- final_wf |> fit(training)
+
+
+training_preds <- final_fit |> predict(training)
+validation_preds <- final_fit |> predict(validation)
+testing_preds <- final_fit |> predict(test)
+
+validation_rmse <- validation_preds |> 
+  bind_cols(validation) |> 
+  rmse(truth = DIC, estimate = .pred) %>%
+  select(.estimate)
+
+print(validation_rmse)
+
+```
+
+```{r}
+# Bind the true DIC values with the predicted DIC values
+testing_2 <- read_csv("test.csv")
+testing_submission_gb <- cbind(testing_2, testing_preds) |> select(id, DIC = .pred)
+
+  
+write_csv(testing_submission_gb, "testing_submission_gb.csv")
+```
+
+
+# Penalized Regression
+## Ridge
+```{r}
+# Ridge
+rec_init <- recipe(DIC ~ ., data = train) |> 
+  step_normalize(all_numeric(), -DIC) |> 
+  prep() 
+
+ridge <- linear_reg(penalty = tune(), mixture = 0) %>% 
+  set_engine("glmnet") %>% 
+  set_mode("regression")
+
+ridge_wf <- workflow() |> 
+  add_model(ridge) |> 
+  add_recipe(rec_init)
+
+ridge_grid <- tibble(penalty = 10^seq(-4, 0, length.out = 10))
+
+ridge_tune_results <- ridge_wf %>%
+  tune_grid(folds, grid = ridge_grid, metrics = metric_set(rmse, rsq))
+
+# Best hyperparameters for Ridge regression
+best_ridge <- ridge_tune_results %>%
+  select_best("rmse")
+
+# Final Ridge regression model
+final_ridge_mod <- ridge %>%
+  finalize_model(best_ridge)
+
+# Update workflows with final models
+final_ridge_wf <- ridge_wf %>%
+  update_model(final_ridge_mod)
+
+
+# Fit final models on training data
+fit_ridge <- final_ridge_wf %>%
+  fit(train)
+
+pred_ridge <- fit_ridge |> predict(train)
+test_ridge <- fit_ridge |> predict(test)
+
+# Bind the true DIC values with the predicted DIC values
+ridge_results <- cbind(train, prediction = pred_ridge$.pred)
+
+# Calculate RMSE on the training data
+ridge_rmse <- ridge_results |> rmse(DIC, prediction)
+print(ridge_rmse)
+
+
+val_preds_ridge <- fit_ridge |> predict(validation)
+
+
+validation_rmse_ridge <- val_preds_ridge |> 
+  bind_cols(validation) |> 
+  rmse(truth = DIC, estimate = .pred) %>%
+  select(.estimate)
+
+print(validation_rmse_ridge)
+
+testing_submission_ridge <- cbind(testing_2, test_ridge) |> select(id, DIC = .pred)
+
+write_csv(testing_submission_ridge, "testing_submission_ridge.csv")
+```
+
+```{r}
+# Ridge
+
+train1 <- read_csv("train.csv") |> select(-1, -...13) |> mutate(TSint = Temperature_degC * Salinity1)
+folds1 <- vfold_cv(data = train1, v = 10, strata = DIC)
+rec_init1 <- recipe(DIC ~ ., data = train1) |> 
+  step_normalize(all_numeric(), -DIC) |> 
+  prep() 
+
+rdige1 <- linear_reg(penalty = tune(), mixture = 0) %>% 
+  set_engine("glmnet") %>% 
+  set_mode("regression")
+
+ridge_wf1 <- workflow() |> 
+  add_model(rdige1) |> 
+  add_recipe(rec_init1)
+
+ridge_grid1 <- tibble(penalty = 10^seq(-4, 0, length.out = 10))
+
+ridge_tune_results1 <- ridge_wf1 %>%
+  tune_grid(folds1, grid = ridge_grid1, metrics = metric_set(rmse, rsq))
+
+# Best hyperparameters for Ridge regression
+best_ridge1 <- ridge_tune_results1 %>%
+  select_best("rmse")
+
+# Final Ridge regression model
+final_ridge_model1 <- rdige1 %>%
+  finalize_model(best_ridge1)
+
+# Update workflows with final models
+final_ridge_wf1 <- ridge_wf1 %>%
+  update_model(final_ridge_model1)
+
+
+# Fit final models on training data
+fit_ridge1 <- final_ridge_wf1 %>%
+  fit(train1)
+
+pred_ridge1 <- fit_ridge1 |> predict(train1)
+
+# Bind the true DIC values with the predicted DIC values
+ridge_results1 <- cbind(train1, prediction = pred_ridge1$.pred)
+
+# Calculate RMSE on the training data
+ridge_rmse_int <- ridge_results1 |> rmse(DIC, prediction)
+print(ridge_rmse_int)
+```
+
+## Lasso
+```{r}
+# Lasso
+lasso <- linear_reg(penalty = tune(), mixture = 1) %>% 
+  set_engine("glmnet") %>% 
+  set_mode("regression")
+
+lasso_wf <- workflow() |> 
+  add_model(lasso) |> 
+  add_recipe(rec_init)
+
+lasso_grid <- tibble(penalty = 10^seq(-4, 0, length.out = 10))
+
+lasso_tune_results <- lasso_wf %>%
+  tune_grid(folds, grid = lasso_grid, metrics = metric_set(rmse, rsq))
+
+# Best hyperparameters for Ridge regression
+best_lasso <- lasso_tune_results %>%
+  select_best("rmse")
+
+# Final Ridge regression model
+final_lasso_mod <- lasso %>%
+  finalize_model(best_lasso)
+
+# Update workflows with final models
+final_lasso_wf <- lasso_wf %>%
+  update_model(final_lasso_mod)
+
+
+# Fit final models on training data
+fit_lasso <- final_lasso_wf %>%
+  fit(train)
+
+pred_lasso <- fit_lasso |> predict(train)
+test_lasso <- fit_lasso |> predict(test)
+
+# Bind the true DIC values with the predicted DIC values
+lasso_results <- cbind(train, prediction = pred_lasso$.pred)
+
+# Calculate RMSE on the training data
+lasso_results <- lasso_results |> rmse(DIC, prediction)
+
+testing_submission_lasso <- cbind(testing_2, test_lasso) |> select(id, DIC = .pred)
+
+lasso_val_preds <- fit_lasso |> predict(validation)
+
+validation_rmse_lasso <- lasso_val_preds |> 
+  bind_cols(validation) |> 
+  rmse(truth = DIC, estimate = .pred) %>%
+  select(.estimate)
+
+print(validation_rmse_lasso)
+
+write_csv(testing_submission_lasso, "testing_submission_lasso.csv")
+
+print(lasso_results)
+
+```
+
+
+# Random Forest
+
+```{r}
+#tidymodels
+
+# Now to tune the model
+randf_spec_tune <- rand_forest(
+  trees = tune(),
+  mtry = tune(),
+  min_n = tune()
+) |>
+  set_mode("regression") |>
+  set_engine("ranger")
+
+# Looking at hyperparameters
+randf_grid <-
+  grid_regular(trees(), min_n(), mtry(range(1:13)), levels = 5)
+
+# Define new workflow
+randf_tune_wf <- workflow() |>
+  add_model(randf_spec_tune) |>
+  add_recipe(rec_init)
+
+# Defining cv for tuning
+
+# Tuning
+randf_rs <- tune_grid(
+  randf_spec_tune,
+  DIC ~ .,
+  resamples = folds,
+  grid = randf_grid,
+  metrics = metric_set(rmse),
+  control = control_grid(save_pred = TRUE, parallel_over = "everything")
+)
+
+# Visualizing our predictions
+autoplot(randf_rs)
+
+# Selecting the best model
+show_best(randf_rs)
+select_best(randf_rs)
+
+# Now to finalize, train and test our best model
+randf_final <- finalize_model(randf_spec_tune, select_best(randf_rs))
+
+final_rf_wf <- workflow() |> update_model(randf_final) |> add_recipe(rec_init)
+
+fit_rf <- final_rf_wf |> fit(train)
+
+pred_rf <- fit_rf |> predict(train)
+
+test_trees <- fit_rf |> predict(test)
+# Bind the true DIC values with the predicted DIC values
+rf_results1 <- cbind(train, prediction = pred_rf$.pred)
+
+# Calculate RMSE on the training data
+rf_results <- rf_results1 |> rmse(DIC, prediction)
+print(rf_results)
+
+rf_results2 <- rf_results1 |> rsq(DIC, prediction)
+print(rf_results2)
+
+
+val_preds_rf <- fit_rf |> predict(validation)
+val_rmse_rf <- val_preds_rf |> 
+  bind_cols(validation) |> 
+  rmse(truth = DIC, estimate = .pred) %>%
+  select(.estimate)
+
+print(val_rmse_rf)
+
+
+testing_submission_dt <- cbind(testing_2, test_trees) |> select(id, DIC = .pred)
+write_csv(testing_submission_dt, "testing_submission_dt.csv")
+```
+
+```{r}
+
+svm_model <- svm_rbf(
+  cost = tune(),
+  rbf_sigma = tune()
+) |> 
+  set_mode("regression") |> 
+  set_engine("kernlab")
+
+svm_workflow <- workflow() |> 
+  add_model(svm_model) |> 
+  add_recipe(rec_init)
+
+tune_svm_grid <- grid_regular(
+  cost(range = c(-3, 3)),
+  rbf_sigma(range = c(-3, 3)),
+  levels = 100
+)
+
+fit_tune_svm <- svm_workflow |> 
+  tune_grid(
+    resamples = folds,
+    grid = tune_svm_grid,
+    metrics = metric_set(rmse),
+    control = control_grid(save_pred = TRUE, parallel_over = "everything")
+  )
+
+best_svm_params <- fit_tune_svm |> 
+  show_best(metric = "rmse") |> 
+  dplyr::slice(1) |> 
+  select(cost, rbf_sigma)
+
+final_svm_model <- svm_rbf(
+  cost = best_svm_params$cost,
+  rbf_sigma = best_svm_params$rbf_sigma
+) |> 
+  set_mode("regression") |> 
+  set_engine("kernlab")
+
+final_svm_wf <- workflow() |> 
+  add_model(final_svm_model) |> 
+  add_recipe(rec_init)
+
+final_svm_fit <- final_svm_wf |> fit(training)
+final_svm_pred <- final_svm_fit |> predict(validation)
+
+
+val_rmse_svm <- final_svm_pred |> 
+  bind_cols(validation) |> 
+  rmse(truth = DIC, estimate = .pred) %>%
+  select(.estimate)
+
+print(val_rmse_svm)
+```
+

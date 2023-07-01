@@ -1,0 +1,300 @@
+---
+title: "Lab6"
+author: {Andrew Bartnik}
+date: "2023-03-01"
+output: html_document
+---
+
+## Case Study Eel Species Distribution Modeling
+
+This week's lab follows a modeling project described by Elith et al. (2008) (Supplementary Reading)
+
+## Data
+
+Grab the model training data set from the class Git:
+
+data/eel.model.data.csv
+
+```{r, include=TRUE}
+library(tidyverse)
+library(tidymodels)
+library(xgboost)
+library(tictoc)
+library(yardstick)
+library(gridExtra)
+
+
+data <- read_csv("eel.model.data.csv")[,-1]
+eval_data <- read_csv("eel.eval.data.csv") |> rename(Angaus = Angaus_obs)
+
+eval_data$Method <- as.factor(eval_data$Method)
+eval_data$Angaus <- as.factor(eval_data$Angaus)
+eval_data$DSDam <- as.factor(eval_data$DSDam)
+```
+
+### Split and Resample
+
+Split the joined data from above into a training and test set, stratified by outcome score. Use 10-fold CV to resample the training set, stratified by Angaus
+
+```{r, include=TRUE}
+data$Method <- as.factor(data$Method)
+data$Angaus <- as.factor(data$Angaus)
+data$DSDam <- as.factor(data$DSDam)
+
+# Splitting the data into a training and test set - using a 25% holdout
+data_split <- initial_split(data = data, prop = 0.75, strata = Angaus)
+training <- training(data_split)
+testing <- testing(data_split)
+
+# Specifying the number of folds 
+folds <- vfold_cv(data = training, v = 10, strata = Angaus)
+
+```
+
+### Preprocess
+
+Create a recipe to prepare your data for the XGBoost model. We are interested in predicting the binary outcome variable Angaus which indicates presence or absence of the eel species Anguilla australis
+
+```{r, include=TRUE}
+# Specifying the recipe
+eel_rec <- recipe(Angaus ~ ., data = training) |> 
+  step_dummy(all_nominal(), -all_outcomes(), one_hot = TRUE) |> 
+  step_normalize(all_numeric()) |> 
+  prep() 
+
+```
+
+## Tuning XGBoost
+
+### Tune Learning Rate
+
+Following the XGBoost tuning strategy outlined on Monday, first we conduct tuning on just the learn_rate parameter:
+
+1.  Create a model specification using {xgboost} for the estimation
+
+-   Only specify one parameter to tune()
+
+```{r, include=TRUE}
+boost_tune <- boost_tree(learn_rate = tune()) |> 
+  set_mode('classification') |> 
+  set_engine("xgboost") 
+```
+
+2.  Set up a grid to tune your model by using a range of learning rate parameter values: expand.grid(learn_rate = seq(0.0001, 0.3, length.out = 30))
+
+```{r, include=TRUE}
+# Using a grid to test values looking for the optimal learn rate
+lr_grid <- expand.grid(learn_rate = seq(0.0001, 0.3, length.out = 30))
+
+```
+
+-   Use appropriate metrics argument(s) - Computational efficiency becomes a factor as models get more complex and data get larger. Record the time it takes to run. Do this for each tuning phase you run.You could use {tictoc} or Sys.time().
+
+    ```{r, include=TRUE}
+    tic()
+
+    # Specifying a new workflow for our tuned learn rate
+    tune_wf <- workflow() |> 
+      add_model(boost_tune) |> 
+      add_recipe(eel_rec) 
+
+
+    # Using our defined grid to tune the learn rate, evaluating these on the folds
+    fit_tune_lr <- tune_wf |> 
+      tune_grid(resamples = folds, grid = lr_grid)
+
+    toc()
+    ```
+
+3.  Show the performance of the best models and the estimates for the learning rate parameter values associated with each.
+
+    ```{r, include=TRUE}
+    # Showing the best learn rate value
+    show_best(fit_tune_lr, metric = c("roc_auc"))
+
+    best_lr <- as.numeric(show_best(fit_tune_lr, metric = "roc_auc")[1,1])
+
+
+    ```
+
+### Tune Tree Parameters
+
+1.  Create a new specification where you set the learning rate (which you already optimized) and tune the tree parameters.
+
+    ```{r, include=TRUE}
+    # Specifying that we want to tune the tree-specific parameters
+    lropt_tune_spec <-
+      boost_tree(
+        learn_rate = best_lr,
+        trees = 3000,
+        min_n = tune(),
+        tree_depth = tune(),
+        loss_reduction = tune()
+      ) |>
+      set_engine("xgboost") |>
+      set_mode('classification')
+
+    ```
+
+2.  Set up a tuning grid. This time use grid_max_entropy() to get a representative sampling of the parameter space
+
+    ```{r, include=TRUE}
+    tic()
+
+    tree_grid_test <- grid_regular(tree_depth(), min_n(), loss_reduction())
+    # Setting up the parameters to be tuned and the grid to search over
+    tree_params <- parameters(tree_depth(), min_n(), loss_reduction())
+    trees_grid <- grid_max_entropy(tree_params, size = 20)
+
+    # Defining a new workflow, adding our models and tuning parameters
+    tree_wf <- workflow() |> add_model(lropt_tune_spec) |> add_recipe(eel_rec)
+
+    # 
+    fit_tune_trees <- tree_wf |> tune_grid(
+      resamples = folds,
+      grid = trees_grid,
+      metrics = metric_set(roc_auc, accuracy),
+      control = control_grid(save_pred = TRUE)
+    )
+
+    toc()
+    ```
+
+3.  Show the performance of the best models and the estimates for the tree parameter values associated with each.
+
+    ```{r, include=TRUE}
+    # Finding the best parameters and the associated accuracy
+    show_best(fit_tune_trees, metric= 'roc_auc')
+      
+    opt_min_n <- as.numeric(show_best(fit_tune_trees, metric = 'roc_auc')[1,1])
+    opt_tree_depth <- as.numeric(show_best(fit_tune_trees, metric = 'roc_auc')[1,2])
+    opt_loss_red <- as.numeric(show_best(fit_tune_trees, metric = 'roc_auc')[1,3])
+    ```
+
+### Tune Stochastic Parameters
+
+1.  Create a new specification where you set the learning rate and tree parameters (which you already optimized) and tune the stochastic parameters.
+
+    ```{r, include=TRUE}
+    # Specifying that we want to tune the stoachastic-specific parameters
+    stoch_tune_spec <-
+      boost_tree(
+        learn_rate = best_lr,
+        trees = 3000,
+        min_n = opt_min_n,
+        tree_depth = opt_tree_depth,
+        loss_reduction = opt_loss_red,
+        mtry = tune(),
+        sample_size = tune()
+      ) |>
+      set_engine("xgboost") |>
+      set_mode('classification')
+    ```
+
+2.  Set up a tuning grid. Use grid_max_entropy() again.
+
+    ```{r, include=TRUE}
+    # Define the parameters
+    stoch_params <- parameters(
+      finalize(mtry(), training),
+      sample_size= sample_prop())
+
+    # Generate a grid of parameter values
+    stoch_grid <- grid_max_entropy(stoch_params, size = 20)
+    ```
+
+    ```{r, include=TRUE}
+    stoch_tune_wf <- workflow() |> 
+      add_model(stoch_tune_spec) |> 
+      add_recipe(eel_rec)
+
+    fit_tune_stoch <- stoch_tune_wf |> tune_grid(
+      resamples = folds,
+      grid = stoch_grid,
+      metrics = metric_set(roc_auc, accuracy),
+      control = control_grid(save_pred = TRUE)
+    )
+    ```
+
+3.  Show the performance of the best models and the estimates for the tree parameter values associated with each.
+
+```{r, include=TRUE}
+show_best(fit_tune_stoch, metric = "roc_auc")
+opt_mtry <- as.numeric(show_best(fit_tune_stoch, metric = "roc_auc")[1,1])
+opt_ss <- as.numeric(show_best(fit_tune_stoch, metric = "roc_auc")[1,2])
+```
+
+## Finalize workflow and make final prediction
+
+1.  Assemble your final workflow will all of your optimized parameters and do a final fit.
+
+2.  How well did your model perform? What types of errors did it make?
+
+```{r, include=TRUE}
+final_model <- boost_tree(learn_rate = best_lr,
+                          trees = 3000,
+                          min_n = opt_min_n,
+                          mtry = opt_mtry,
+                          tree_depth = opt_tree_depth,
+                          loss_reduction = opt_loss_red,
+                          sample_size = opt_ss 
+                          ) |> 
+  set_mode("classification") |> 
+  set_engine("xgboost")
+
+final_wf <- workflow() |> 
+  add_model(final_model) |> 
+  add_recipe(eel_rec)
+
+final_fit <- final_wf |> fit(training)
+training_preds <- final_fit |> predict(testing)
+
+training_probpred <- final_fit |> predict(testing, type = 'prob')
+training_acc <- cbind(training_preds, training_probpred, testing)
+
+accuracy(training_acc, truth = Angaus, estimate = .pred_class)
+roc_auc(training_acc, truth = Angaus, estimate = .pred_0)
+
+print(paste("Our model performed relatively well. Its accuracy was", as.numeric(accuracy(training_acc, truth = Angaus, estimate = .pred_class)[1,3]), "and had a roc_auc of", as.numeric(roc_auc(training_acc, truth = Angaus, estimate = .pred_0)[1,3]), ". We did become less accurate as we tuned our models hyperparameters, which is likely due to the generated grids choosing less accurate combinations of the parameters than the default values."))
+```
+
+## Fit your model the evaluation data and compare performance
+
+1.  Now fit your final model to the big dataset: data/eval.data.csv
+
+```{r}
+class_pred <- final_fit |> predict(eval_data)
+prob_pred <- final_fit |> predict(eval_data, type = 'prob')
+
+acc_df <- cbind(class_pred, prob_pred, eval_data)
+accuracy(acc_df, truth = Angaus, estimate = .pred_class)
+roc_auc(acc_df, truth = Angaus, estimate = .pred_0)
+```
+
+2.  How does your model perform on this data?
+
+    ```{r}
+    print(paste("Our model achieves an accuracy of", as.numeric(accuracy(acc_df, truth = Angaus, estimate = .pred_class)[1,3]), "and a roc_auc of", as.numeric(roc_auc(acc_df, truth = Angaus, estimate = .pred_0)[1,3]),  ".So it performed comparably well on the evaluation data."))
+    ```
+
+3.  How do your results compare to those of Elith et al.?
+
+    **Elith et al. achieved a roc_auc of \~0.87 using cross validation. We achieve a roc_auc of \~0.84, so our model has performed pretty well.**
+
+-   Use {vip} to compare variable importance
+
+    **VIP shows that the most important variable was SegSumT - The summer air temperature across both the training and evaluation data.**
+
+-   What do your variable importance results tell you about the distribution of this eel species?
+
+    **VIP shows that eels are much more likely to be present in warmer water, with a shallower slope in the upstream section.**
+
+```{r, include=TRUE}
+p <- final_wf |> fit(data = data) |> pull_workflow_fit() |> vip::vip(geom = "col")
+p1 <- p + labs(title = "Eel data") + aes(fill=Importance)
+
+eval_vip <- final_wf |> fit(data = eval_data) |> pull_workflow_fit() |> vip::vip(geom = "col")
+vip2 <- eval_vip + labs(title = "Eval Data") + aes(fill=Importance)
+
+grid.arrange(p1, vip2, ncol = 2)
+```

@@ -1,0 +1,39 @@
+"0","glimpse(dat)"
+"1","Rows: 1,757"
+"1",""
+"1","
+"
+"1","Columns: 27"
+"1",""
+"1","
+"
+"1","$ ...1              [3m[38;5;246m<dbl>[39m[23m 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 2…
+$ `City Name`       [3m[38;5;246m<chr>[39m[23m ""BALTIMORE"", ""BALTIMORE"", ""BALTIMORE"", ""BALTIMORE"", ""BALTIMORE"", ""BALTIMORE""…
+$ Type              [3m[38;5;246m<chr>[39m[23m NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, …
+$ Package           [3m[38;5;246m<chr>[39m[23m ""24 inch bins"", ""24 inch bins"", ""24 inch bins"", ""24 inch bins"", ""24 inch bin…
+$ Variety           [3m[38;5;246m<chr>[39m[23m NA, NA, ""HOWDEN TYPE"", ""HOWDEN TYPE"", ""HOWDEN TYPE"", ""HOWDEN TYPE"", ""HOWDEN …
+$ `Sub Variety`     [3m[38;5;246m<chr>[39m[23m NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, …
+$ Grade             [3m[38;5;246m<lgl>[39m[23m NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, …
+$ Date              [3m[38;5;246m<chr>[39m[23m ""4/29/17"", ""5/6/17"", ""9/24/16"", ""9/24/16"", ""11/5/16"", ""11/12/16"", ""9/24/16"",…
+$ `Low Price`       [3m[38;5;246m<dbl>[39m[23m 270, 270, 160, 160, 90, 90, 160, 160, 160, 160, 160, 160, 150, 150, 150, 140…
+$ `High Price`      [3m[38;5;246m<dbl>[39m[23m 280, 280, 160, 160, 100, 100, 170, 160, 170, 160, 170, 160, 160, 170, 160, 1…
+$ `Mostly Low`      [3m[38;5;246m<dbl>[39m[23m 270, 270, 160, 160, 90, 90, 160, 160, 160, 160, 160, 160, 150, 150, 150, 140…
+$ `Mostly High`     [3m[38;5;246m<dbl>[39m[23m 280, 280, 160, 160, 100, 100, 170, 160, 170, 160, 170, 160, 160, 170, 160, 1…
+$ Origin            [3m[38;5;246m<chr>[39m[23m ""MARYLAND"", ""MARYLAND"", ""DELAWARE"", ""VIRGINIA"", ""MARYLAND"", ""MARYLAND"", ""MAR…
+$ `Origin District` [3m[38;5;246m<chr>[39m[23m NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, …
+$ `Item Size`       [3m[38;5;246m<chr>[39m[23m ""lge"", ""lge"", ""med"", ""med"", ""lge"", ""lge"", ""med"", ""lge"", ""med"", ""lge"", ""med"",…
+$ Color             [3m[38;5;246m<chr>[39m[23m NA, NA, ""ORANGE"", ""ORANGE"", ""ORANGE"", ""ORANGE"", ""ORANGE"", ""ORANGE"", ""ORANGE""…
+$ Environment       [3m[38;5;246m<lgl>[39m[23m NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, …
+$ `Unit of Sale`    [3m[38;5;246m<chr>[39m[23m NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, …
+$ Quality           [3m[38;5;246m<lgl>[39m[23m NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, …
+$ Condition         [3m[38;5;246m<lgl>[39m[23m NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, …
+$ Appearance        [3m[38;5;246m<lgl>[39m[23m NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, …
+$ Storage           [3m[38;5;246m<lgl>[39m[23m NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, …
+$ Crop              [3m[38;5;246m<lgl>[39m[23m NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, …
+$ Repack            [3m[38;5;246m<chr>[39m[23m ""E"", ""E"", ""N"", ""N"", ""N"", ""N"", ""N"", ""N"", ""N"", ""N"", ""N"", ""N"", ""N"", ""N"", ""N"", ""…
+$ `Trans Mode`      [3m[38;5;246m<lgl>[39m[23m NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, …
+$ ...26             [3m[38;5;246m<lgl>[39m[23m NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, …
+$ ...27             [3m[38;5;246m<chr>[39m[23m NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, …"
+"1",""
+"1","
+"

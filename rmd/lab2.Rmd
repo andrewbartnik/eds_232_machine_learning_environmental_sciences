@@ -1,0 +1,239 @@
+---
+title: "Bartnik_Lab2"
+author: "Andrew Bartnik"
+date: "2023-01-18"
+output: pdf_document
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+```{r, include=FALSE}
+source("~/Desktop/MEDS/Winter/Machine Learning/Labs/MLLab1/lab1script.R")
+```
+
+Today we will be continuing the pumpkin case study from last week. We
+will be using the data that you cleaned and split last time
+(pumpkins_train) and will be comparing our results today to those you
+have already obtained, so open and run your Lab 1 .Rmd as a first step
+so those objects are available in your Environment (unless you created
+an R Project last time, in which case, kudos to you!).
+
+Once you have done that, we'll start today's lab by specifying a recipe
+for a polynomial model. First we specify a recipe that identifies our
+variables and data, converts package to a numerical form, and then add a
+polynomial effect with step_poly()
+
+```{r, echo=TRUE}
+# Specify a recipe
+poly_pumpkins_recipe <-
+  recipe(price ~ package, data = pumpkins_train) %>%
+  step_integer(all_predictors(), zero_based = TRUE) %>% 
+  step_poly(all_predictors(), degree = 4)
+```
+
+How did that work? Choose another value for degree if you need to. Later
+we will learn about model tuning that will let us do things like find
+the optimal value for degree. For now, we'd like to have a flexible
+model, so find the highest value for degree that is consistent with our
+data.
+
+Polynomial regression is still linear regression, so our model
+specification looks similar to before.
+
+```{r, echo=TRUE}
+# Create a model specification called poly_spec
+poly_spec <- linear_reg() %>% 
+  set_engine("lm") %>% 
+  set_mode("regression")
+```
+
+Question 1: Now take the recipe and model specification that just
+created and bundle them into a workflow called poly_df.
+
+```{r, echo=TRUE}
+# Bundle recipe and model spec into a workflow
+poly_wf <- workflow() |> 
+  add_recipe(poly_pumpkins_recipe) |> 
+  add_model(poly_spec)
+```
+
+Question 2: fit a model to the pumpkins_train data using your workflow
+and assign it to poly_wf_fit
+
+```{r, echo=TRUE}
+# Create a model
+poly_wf_fit <- poly_wf |> fit(pumpkins_train)
+```
+
+```{r, echo=TRUE}
+# Print learned model coefficients
+poly_wf_fit
+```
+
+```{r, echo=TRUE}
+# Make price predictions on test data
+poly_results <- poly_wf_fit %>% predict(new_data = pumpkins_test) %>% 
+  bind_cols(pumpkins_test %>% select(c(package, price))) %>% 
+  relocate(.pred, .after = last_col())
+# Print the results
+poly_results %>% 
+  slice_head(n = 10)
+```
+
+Now let's evaluate how the model performed on the test_set using
+yardstick::metrics().
+
+```{r, echo=TRUE}
+metrics(data = poly_results, truth = price, estimate = .pred)
+```
+
+Question 3: How do the performance metrics differ between the linear
+model from last week and the polynomial model we fit today? Which model
+performs better on predicting the price of different packages of
+pumpkins?
+
+**The polynomial model that we fit today does a much better job at
+predicting the price of different packages of pumpkins. The polynomial
+model has lower RMSE, MAE, and a higher R-squared. This model
+consistently outperforms the linear model from last week.**
+
+Let's visualize our model results. First prep the results by binding the
+encoded package variable to them.
+
+```{r, echo=TRUE}
+# Bind encoded package column to the results
+poly_results <- poly_results %>% 
+  bind_cols(package_encode %>% 
+              rename(package_integer = package)) %>% 
+  relocate(package_integer, .after = package)
+# Print new results data frame
+poly_results %>% 
+  slice_head(n = 5)
+```
+
+OK, now let's take a look!
+
+Question 4: Create a scatter plot that takes the poly_results and plots
+package vs. price. Then draw a line showing our model's predicted values
+(.pred). Hint: you'll need separate geoms for the data points and the
+prediction line.
+
+```{r, echo=TRUE}
+# Make a scatter plot
+poly_results %>% 
+  ggplot(aes(x = package_integer, y = price)) + 
+  geom_point(color = 'blue') + 
+  geom_point(aes(y = .pred), color = 'red') +
+  geom_line(aes(y = .pred), color = 'red') + 
+  labs(title = "Predicted pumpkin package price (red) vs. Actual (blue)", 
+       x= "Package Size",
+       y = "Price")
+```
+
+You can see that a curved line fits your data much better.
+
+Question 5: Now make a smoother line by using geom_smooth instead of
+geom_line and passing it a polynomial formula like this:
+geom_smooth(method = lm, formula = y \~ poly(x, degree = 3), color =
+"midnightblue", size = 1.2, se = FALSE)
+
+```{r, echo=TRUE}
+# Make a smoother scatter plot 
+poly_results %>% 
+  ggplot(aes(x = package_integer, y = price)) + 
+  geom_point(color = 'blue') + 
+  geom_point(aes(y = .pred), color = 'red') +
+  geom_smooth(method = lm, formula = y ~ poly(x, degree = 3), color = "red", size = 1.2, se = FALSE) + 
+  labs(title = "Predicted pumpkin package price (red) vs. Actual (blue)", 
+       x= "Package Size",
+       y = "Price")
+```
+
+OK, now it's your turn to go through the process one more time.
+
+Additional assignment components :
+
+6\. Choose a new predictor variable (anything not involving package
+type) in this dataset.
+
+I'm going to use the `variety` variable to try to predict `price`
+
+7\. Determine its correlation with the outcome variable (price).
+(Remember we calculated a correlation matrix last week)
+
+```{r, echo=TRUE}
+cor(baked_pumpkins$variety, baked_pumpkins$price)
+```
+
+8\. Create and test a model for your new predictor: - Create a recipe -
+Build a model specification (linear or polynomial) - Bundle the recipe
+and model specification into a workflow - Create a model by fitting the
+workflow - Evaluate model performance on the test data - Create a
+visualization of model performance
+
+```{r, echo=TRUE}
+# Create a recipe
+poly_pumpkins_recipe_variety <-
+  recipe(price ~ variety, data = pumpkins_train) %>%
+  step_integer(all_predictors(), zero_based = TRUE) %>% 
+  step_poly(all_predictors(), degree = 3)
+
+# Create a model specification called poly_spec_var for variety
+poly_spec_var <- linear_reg() %>% 
+  set_engine("lm") %>% 
+  set_mode("regression")
+
+# Now create a workflow
+poly_wf_var <- workflow() |> 
+  add_recipe(poly_pumpkins_recipe_variety) |> 
+  add_model(poly_spec_var)
+
+# Now create a model and fit the workflow
+poly_wf_fit_var <- poly_wf_var |> fit(pumpkins_train)
+poly_wf_fit_var
+
+# Make price predictions on test data
+poly_results_var <- poly_wf_fit_var %>% predict(new_data = pumpkins_test) %>% 
+  bind_cols(pumpkins_test %>% select(c(variety, price))) %>% 
+  relocate(.pred, .after = last_col())
+
+
+poly_results_var <- poly_results_var %>% 
+  mutate(int = case_when(variety == "PIE TYPE" ~ 0,
+                         variety == "MINIATURE" ~ 1,
+                         variety == "FAIRYTALE" ~ 2))
+# Print the results
+poly_results_var %>% 
+  slice_head(n = 10)
+
+# Metrics
+metrics(data = poly_results_var, truth = price, estimate = .pred)
+
+```
+
+Now for visualizations
+
+```{r, echo=TRUE}
+# Linear plot
+poly_results_var %>% 
+  ggplot(aes(x = int, y = price)) + 
+  geom_point(color = 'blue', alpha = 0.5) + 
+  geom_point(aes(y = .pred), color = 'red') +
+  geom_line(aes(y = .pred), color = 'red') + 
+  labs(title = "Predicted pumpkin variety price (red) vs. Actual (blue) (Linear)", 
+       x= "Package Size",
+       y = "Price")
+
+# Polynomial Plot
+poly_results_var %>% 
+  ggplot(aes(x = int, y = price)) + 
+  geom_point(color = 'blue', alpha = 0.5) + 
+  geom_point(aes(y = .pred), color = 'red') +
+  geom_smooth(method = lm, formula = y ~ poly(x, degree = 2), color = "red", size = 1.2, se = FALSE) + 
+  labs(title = "Predicted pumpkin variety price (red) vs. Actual (blue) (Polynomial)", 
+       x= "Package Size",
+       y = "Price")
+```
+
+Lab 2 due 1/24 at 11:59 PM

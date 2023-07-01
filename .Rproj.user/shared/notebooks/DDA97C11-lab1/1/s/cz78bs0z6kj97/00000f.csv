@@ -1,0 +1,7 @@
+"0","# Extract the month and day from the dates and add as new columns"
+"0","pumpkins <- pumpkins %>%"
+"0","  mutate(date = mdy(date),  "
+"0","         day = yday(date),"
+"0","         month = month(date))"
+"0","pumpkins %>% "
+"0","  select(-day)"
