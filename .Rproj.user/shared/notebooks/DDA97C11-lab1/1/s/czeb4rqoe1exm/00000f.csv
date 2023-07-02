@@ -1,3 +1,0 @@
-"0","# Verify the distinct observations in Package column"
-"0","pumpkins %>% "
-"0","  distinct(package)"

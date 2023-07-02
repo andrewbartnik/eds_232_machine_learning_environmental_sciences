@@ -1,3 +1,0 @@
-"0","# Create a new column price"
-"0","pumpkins <- pumpkins %>% "
-"0","  mutate(price = (low_price+ high_price)/2)"
